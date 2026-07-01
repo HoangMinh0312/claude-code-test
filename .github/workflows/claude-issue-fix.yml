@@ -157,8 +157,6 @@ jobs:
                 }
               }
             }
-          # Let Claude create the branch + PR itself; don't auto-commit
-          direct_prompt: false
 
       # ── Dev server logs (debug) ───────────────────────────────────────────
       - name: Upload Next.js logs
