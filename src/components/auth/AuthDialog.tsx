@@ -38,7 +38,7 @@ export function AuthDialog({
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>
-            {mode === "signin" ? "Welcome back" : "Create an account"}
+            {mode === "signin" ? "welcome to the hell" : "Create an account"}
           </DialogTitle>
           <DialogDescription>
             {mode === "signin"
