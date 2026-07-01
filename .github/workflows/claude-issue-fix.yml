@@ -36,7 +36,6 @@ jobs:
 
     env:
       DATABASE_URL: file:./dev.db
-      ANTHROPIC_API_KEY: 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
 
     steps:
       # ── Repo ──────────────────────────────────────────────────────────────
