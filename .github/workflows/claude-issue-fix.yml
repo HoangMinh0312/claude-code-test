@@ -1,0 +1,171 @@
+name: Claude Code — Auto-fix Issue
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+# Prevent concurrent runs for the same issue
+concurrency:
+  group: claude-fix-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  auto-fix:
+    name: Fix with Claude Code + Playwright
+    runs-on: ubuntu-latest
+
+    # Gate 1: issue labeled "claude" OR comment "/claude ..." from a collaborator/owner/member
+    if: |
+      (
+        github.event_name == 'issues' &&
+        github.event.label.name == 'claude'
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request == null &&
+        startsWith(github.event.comment.body, '/claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    env:
+      DATABASE_URL: file:./dev.db
+      ANTHROPIC_API_KEY: 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
+
+    steps:
+      # ── Repo ──────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Node + deps ───────────────────────────────────────────────────────
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Database ──────────────────────────────────────────────────────────
+      - name: Prisma — generate + migrate
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+
+      # ── Playwright ────────────────────────────────────────────────────────
+      - name: Install Playwright (Chromium only)
+        run: npx playwright install chromium --with-deps
+
+      # ── Dev server ────────────────────────────────────────────────────────
+      - name: Start Next.js dev server (background)
+        run: npm run dev > /tmp/nextjs.log 2>&1 &
+
+      - name: Wait for http://localhost:3000
+        run: npx wait-on http://localhost:3000 --timeout 90000
+
+      # ── Build prompt ──────────────────────────────────────────────────────
+      - name: Build Claude prompt
+        id: prompt
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Escape body so it survives the heredoc
+          SAFE_ISSUE=$(printf '%s' "$ISSUE_BODY" | head -c 4000)
+          EXTRA=""
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            # Strip the /claude prefix to get the actual instruction
+            EXTRA=$(printf '%s' "$COMMENT_BODY" | sed 's|^/claude[[:space:]]*||')
+          fi
+
+          cat <<'PROMPT_EOF' > /tmp/claude_prompt.txt
+          You are an AI engineer working on the **uigen** Next.js 15 app.
+          The app is live at http://localhost:3000 (already running — do NOT start it again).
+
+          ## Task
+          Analyse and fix the GitHub issue below, then open a pull request.
+
+          ## Issue
+          PROMPT_EOF
+
+          cat >> /tmp/claude_prompt.txt <<ISSUE_EOF
+          #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+          ${SAFE_ISSUE}
+          ISSUE_EOF
+
+          if [ -n "$EXTRA" ]; then
+            printf '\n## Extra instruction from commenter\n%s\n' "$EXTRA" >> /tmp/claude_prompt.txt
+          fi
+
+          cat >> /tmp/claude_prompt.txt <<'STEPS_EOF'
+
+          ## Steps to follow
+          1. **Understand** — read the issue carefully.
+          2. **Explore** — use Playwright to visit http://localhost:3000 and reproduce the problem if possible. Take a screenshot for reference.
+          3. **Diagnose** — trace the root cause through the source files (`src/`).
+          4. **Fix** — edit only what is necessary; no unrelated refactors.
+          5. **Verify** — use Playwright again: navigate to http://localhost:3000, exercise the affected feature, and confirm the issue is resolved.
+          6. **PR** — commit your changes to a new branch named `fix/issue-<issue-number>` and open a pull request against `main` with:
+             - A clear title referencing the issue number.
+             - A description explaining what was broken and how it was fixed.
+             - A note that it was automatically verified with Playwright at localhost:3000.
+
+          ## Architecture cheat-sheet
+          - API route: `src/app/api/chat/route.ts`
+          - AI tools: `src/lib/tools/`
+          - Virtual FS: `src/lib/file-system.ts`
+          - Preview pipeline: `src/lib/transform/jsx-transformer.ts`
+          - UI layout: `src/app/main-content.tsx`
+          - Auth: `src/lib/auth.ts` (JWT, httpOnly cookie)
+          - DB schema: `prisma/schema.prisma` (SQLite)
+
+          Keep changes minimal and targeted.
+          STEPS_EOF
+
+          # Expose file path for next step
+          echo "path=/tmp/claude_prompt.txt" >> "$GITHUB_OUTPUT"
+
+      # ── Claude Code ───────────────────────────────────────────────────────
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt_file: ${{ steps.prompt.outputs.path }}
+          mcp_config: |
+            {
+              "mcpServers": {
+                "playwright": {
+                  "command": "npx",
+                  "args": [
+                    "@playwright/mcp@latest",
+                    "--browser", "chromium",
+                    "--headless"
+                  ]
+                }
+              }
+            }
+          # Let Claude create the branch + PR itself; don't auto-commit
+          direct_prompt: false
+
+      # ── Dev server logs (debug) ───────────────────────────────────────────
+      - name: Upload Next.js logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-dev-log
+          path: /tmp/nextjs.log
+          retention-days: 3
