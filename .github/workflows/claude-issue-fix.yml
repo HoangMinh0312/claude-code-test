@@ -150,6 +150,8 @@ jobs:
           trigger_phrase: "/claude"
           label_trigger: "claude"
           model: "claude-sonnet-4-5"
+          base_branch: "main"
+          branch_prefix: "fix/"
           direct_prompt: ${{ steps.prompt.outputs.content }}
           mcp_config: |
             {
