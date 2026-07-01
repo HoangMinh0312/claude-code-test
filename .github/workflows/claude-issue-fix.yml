@@ -128,13 +128,12 @@ jobs:
           # Check if branch has commits ahead of main
           AHEAD=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)
           if [ "$AHEAD" -gt 0 ]; then
+            BODY="Closes #${ISSUE_NUMBER}"$'\n\n'"Automatically fixed by Claude Code."
             gh pr create \
               --base main \
               --head "$BRANCH" \
               --title "fix: $ISSUE_TITLE (#$ISSUE_NUMBER)" \
-              --body "Closes #$ISSUE_NUMBER
-
-Automatically fixed by Claude Code." \
+              --body "$BODY" \
               || echo "PR already exists or creation failed"
           else
             echo "No commits ahead of main, skipping PR creation"
