@@ -71,76 +71,6 @@ jobs:
       - name: Wait for http://localhost:3000
         run: npx wait-on http://localhost:3000 --timeout 90000
 
-      # ── Build prompt ──────────────────────────────────────────────────────
-      - name: Build Claude prompt
-        id: prompt
-        env:
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          # Escape body so it survives the heredoc
-          SAFE_ISSUE=$(printf '%s' "$ISSUE_BODY" | head -c 4000)
-          EXTRA=""
-          if [ "$EVENT_NAME" = "issue_comment" ]; then
-            # Strip the /claude prefix to get the actual instruction
-            EXTRA=$(printf '%s' "$COMMENT_BODY" | sed 's|^/claude[[:space:]]*||')
-          fi
-
-          cat <<'PROMPT_EOF' > /tmp/claude_prompt.txt
-          You are an AI engineer working on the **uigen** Next.js 15 app.
-          The app is live at http://localhost:3000 (already running — do NOT start it again).
-
-          ## Task
-          Analyse and fix the GitHub issue below, then open a pull request.
-
-          ## Issue
-          PROMPT_EOF
-
-          cat >> /tmp/claude_prompt.txt <<ISSUE_EOF
-          #${ISSUE_NUMBER}: ${ISSUE_TITLE}
-
-          ${SAFE_ISSUE}
-          ISSUE_EOF
-
-          if [ -n "$EXTRA" ]; then
-            printf '\n## Extra instruction from commenter\n%s\n' "$EXTRA" >> /tmp/claude_prompt.txt
-          fi
-
-          cat >> /tmp/claude_prompt.txt <<'STEPS_EOF'
-
-          ## Steps to follow
-          1. **Understand** — read the issue carefully.
-          2. **Explore** — use Playwright to visit http://localhost:3000 and reproduce the problem if possible. Take a screenshot for reference.
-          3. **Diagnose** — trace the root cause through the source files (`src/`).
-          4. **Fix** — edit only what is necessary; no unrelated refactors.
-          5. **Verify** — use Playwright again: navigate to http://localhost:3000, exercise the affected feature, and confirm the issue is resolved.
-          6. **PR** — commit your changes to a new branch named `fix/issue-<issue-number>` and open a pull request against `main` with:
-             - A clear title referencing the issue number.
-             - A description explaining what was broken and how it was fixed.
-             - A note that it was automatically verified with Playwright at localhost:3000.
-
-          ## Architecture cheat-sheet
-          - API route: `src/app/api/chat/route.ts`
-          - AI tools: `src/lib/tools/`
-          - Virtual FS: `src/lib/file-system.ts`
-          - Preview pipeline: `src/lib/transform/jsx-transformer.ts`
-          - UI layout: `src/app/main-content.tsx`
-          - Auth: `src/lib/auth.ts` (JWT, httpOnly cookie)
-          - DB schema: `prisma/schema.prisma` (SQLite)
-
-          Keep changes minimal and targeted.
-          STEPS_EOF
-
-          # Export prompt content as multiline output
-          {
-            echo 'content<<CONTENT_EOF'
-            cat /tmp/claude_prompt.txt
-            echo 'CONTENT_EOF'
-          } >> "$GITHUB_OUTPUT"
-
       # ── Claude Code ───────────────────────────────────────────────────────
       - name: Run Claude Code
         uses: anthropics/claude-code-action@beta
@@ -152,7 +82,27 @@ jobs:
           model: "claude-sonnet-4-5"
           base_branch: "main"
           branch_prefix: "fix/"
-          direct_prompt: ${{ steps.prompt.outputs.content }}
+          use_sticky_comment: true
+          custom_instructions: |
+            You are an AI engineer working on the **uigen** Next.js 15 app.
+            The app is live at http://localhost:3000 (already running — do NOT start it again).
+
+            ## Steps to follow
+            1. **Understand** — read the issue carefully.
+            2. **Explore** — use Playwright to visit http://localhost:3000 and reproduce the problem. Take a screenshot.
+            3. **Diagnose** — trace the root cause through the source files (`src/`).
+            4. **Fix** — edit only what is necessary; no unrelated refactors.
+            5. **Verify** — use Playwright again to confirm the issue is resolved.
+            6. **PR** — commit your changes and open a pull request against `main`.
+
+            ## Architecture
+            - API route: `src/app/api/chat/route.ts`
+            - AI tools: `src/lib/tools/`
+            - Virtual FS: `src/lib/file-system.ts`
+            - Preview pipeline: `src/lib/transform/jsx-transformer.ts`
+            - UI layout: `src/app/main-content.tsx`
+            - Auth: `src/lib/auth.ts` (JWT, httpOnly cookie)
+            - DB schema: `prisma/schema.prisma` (SQLite)
           mcp_config: |
             {
               "mcpServers": {
