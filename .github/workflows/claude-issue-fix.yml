@@ -134,8 +134,12 @@ jobs:
           Keep changes minimal and targeted.
           STEPS_EOF
 
-          # Expose file path for next step
-          echo "path=/tmp/claude_prompt.txt" >> "$GITHUB_OUTPUT"
+          # Export prompt content as multiline output
+          {
+            echo 'content<<CONTENT_EOF'
+            cat /tmp/claude_prompt.txt
+            echo 'CONTENT_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       # ── Claude Code ───────────────────────────────────────────────────────
       - name: Run Claude Code
@@ -143,7 +147,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          prompt_file: ${{ steps.prompt.outputs.path }}
+          trigger_phrase: "/claude"
+          label_trigger: "claude"
+          direct_prompt: ${{ steps.prompt.outputs.content }}
           mcp_config: |
             {
               "mcpServers": {
